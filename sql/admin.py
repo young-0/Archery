@@ -118,7 +118,21 @@ class UsersAdmin(UserAdmin):
 # 用户2fa管理
 @admin.register(TwoFactorAuthConfig)
 class TwoFactorAuthConfigAdmin(admin.ModelAdmin):
-    list_display = ("id", "username", "auth_type", "phone", "secret_key", "user_id")
+    list_display = ("id", "username", "auth_type", "phone", "masked_secret", "user_id")
+
+    # B3: TOTP 种子永不渲染，2FA 配置禁止经 Admin 增删改（走用户自助页面）
+    @admin.display(description="secret_key")
+    def masked_secret(self, obj):
+        return "******"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 # 资源组管理
@@ -180,8 +194,14 @@ class InstanceAdmin(admin.ModelAdmin):
 
     def formfield_for_dbfield(self, db_field, **kwargs):
         if db_field.name == "password":
-            kwargs["widget"] = PasswordInput(render_value=True)
+            # B3: 不渲染已存密码明文
+            kwargs["widget"] = PasswordInput(render_value=False)
         return super(InstanceAdmin, self).formfield_for_dbfield(db_field, **kwargs)
+
+    # B3: 编辑态排除 password 字段——既不显示也不保存，
+    # 避免空表单把已有密码清空；改密码走实例管理页面
+    def get_exclude(self, request, obj=None):
+        return ("password",) if obj else ()
 
     # 阿里云实例关系配置
     class AliRdsConfigInline(admin.TabularInline):
@@ -235,8 +255,16 @@ class TunnelAdmin(admin.ModelAdmin):
 
     def formfield_for_dbfield(self, db_field, **kwargs):
         if db_field.name in ["password", "pkey_password"]:
-            kwargs["widget"] = PasswordInput(render_value=True)
+            # B3: 不渲染已存口令明文
+            kwargs["widget"] = PasswordInput(render_value=False)
         return super(TunnelAdmin, self).formfield_for_dbfield(db_field, **kwargs)
+
+    # B3: 编辑态只保留基本信息，凭据字段（user/password/pkey*）不显示不保存，
+    # 防止明文泄露与误清空；凭据变更走隧道管理页面
+    def get_fieldsets(self, request, obj=None):
+        if obj is not None:
+            return ((None, {"fields": ("tunnel_name", "host", "port")}),)
+        return super(TunnelAdmin, self).get_fieldsets(request, obj)
 
     # 不支持修改标签代码
     def get_readonly_fields(self, request, obj=None):
@@ -419,10 +447,19 @@ class InstanceDatabaseAdmin(admin.ModelAdmin):
 # 实例用户列表
 @admin.register(InstanceAccount)
 class InstanceAccountAdmin(admin.ModelAdmin):
-    list_display = ("user", "host", "password", "instance", "remark")
+    list_display = ("user", "host", "masked_password", "instance", "remark")
     search_fields = ("user", "host")
     list_filter = ("instance", "host")
     list_display_links = ("user",)
+
+    # B3: 口令列永不渲染明文
+    @admin.display(description="password")
+    def masked_password(self, obj):
+        return "******"
+
+    # B3: 编辑态排除 password，防止明文显示与误清空
+    def get_exclude(self, request, obj=None):
+        return ("password",) if obj else ()
 
     # 仅支持修改备注
     def get_readonly_fields(self, request, obj=None):
@@ -513,7 +550,21 @@ class ArchiveConfigAdmin(admin.ModelAdmin):
 # 云服务认证信息配置
 @admin.register(CloudAccessKey)
 class CloudAccessKeyAdmin(admin.ModelAdmin):
-    list_display = ("type", "key_id", "key_secret", "remark")
+    list_display = ("type", "key_id", "masked_key_secret", "remark")
+
+    # B3: 云密钥永不渲染明文，且禁止经 Admin 增删改
+    @admin.display(description="key_secret")
+    def masked_key_secret(self, obj):
+        return "******"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 # 登录审计日志

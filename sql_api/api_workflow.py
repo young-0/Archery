@@ -26,7 +26,8 @@ from sql.models import (
     ArchiveConfig,
 )
 from sql.utils.sql_review import can_cancel, can_execute, on_correct_time_period
-from sql.utils.resource_group import user_groups
+from sql.utils.resource_group import user_groups, user_instances
+from sql.utils.sql_security import check_sql_security, masked_engine_error
 from sql.utils.workflow_audit import Audit
 from sql.utils.tasks import del_schedule
 from sql.notify import notify_for_audit, notify_for_execute
@@ -59,16 +60,26 @@ class ExecuteCheck(views.APIView):
         serializer = ExecuteCheckSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         instance = serializer.get_instance()
+        # B1: 实例级授权，与 Web 端一致——只能检查自己资源组内的实例
+        if not user_instances(request.user).filter(pk=instance.pk).exists():
+            raise serializers.ValidationError({"errors": "无该实例权限"})
+        full_sql = request.data["full_sql"].strip()
+        # B4: 公共安全校验（函数黑名单+危险DDL），与工单创建共用
+        try:
+            check_sql_security(full_sql, user=request.user, instance_id=instance.id)
+        except ValueError as e:
+            raise serializers.ValidationError({"errors": str(e)})
         # 交给engine进行检测
         try:
             db_name = request.data["db_name"]
             check_engine = get_engine(instance=instance)
             db_name = check_engine.escape_string(db_name)
-            check_result = check_engine.execute_check(
-                db_name=db_name, sql=request.data["full_sql"].strip()
-            )
+            check_result = check_engine.execute_check(db_name=db_name, sql=full_sql)
         except Exception as e:
-            raise serializers.ValidationError({"errors": f"{e}"})
+            # B2补充: 异常出口不直接回传 str(e)，统一脱敏
+            raise serializers.ValidationError(
+                {"errors": masked_engine_error(e, f"sqlcheck instance={instance.id}")}
+            )
         check_result.rows = check_result.to_dict()
         serializer_obj = ExecuteCheckResultSerializer(check_result)
         return Response(serializer_obj.data)

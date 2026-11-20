@@ -19,6 +19,7 @@ from django_q.tasks import async_task
 from sql.engines import get_engine
 from sql.utils.workflow_audit import Audit
 from sql.utils.resource_group import user_instances
+from sql.utils.sql_security import check_sql_security, masked_engine_error
 from sql.notify import notify_for_audit
 from common.utils.const import WorkflowDict
 from common.config import SysConfig
@@ -366,6 +367,13 @@ class WorkflowContentSerializer(serializers.ModelSerializer):
         except instance.DoesNotExist:
             raise serializers.ValidationError({"errors": "你所在组未关联该实例！"})
 
+        # B4: 与 sqlcheck 共用公共安全校验（函数黑名单+危险DDL），防止绕过检查接口直接建单
+        # 置于实例授权之后：无权限用户不触发安全扫描与日志
+        try:
+            check_sql_security(sql_content, user=user, instance_id=instance.id)
+        except ValueError as e:
+            raise serializers.ValidationError({"errors": str(e)})
+
         # 再次交给engine进行检测，防止绕过
         try:
             check_engine = get_engine(instance=instance)
@@ -373,7 +381,10 @@ class WorkflowContentSerializer(serializers.ModelSerializer):
                 db_name=workflow_data["db_name"], sql=sql_content
             )
         except Exception as e:
-            raise serializers.ValidationError({"errors": str(e)})
+            # B2补充: 异常出口统一脱敏，不直接回传 str(e)
+            raise serializers.ValidationError(
+                {"errors": masked_engine_error(e, f"workflow create instance={instance.id}")}
+            )
 
         # 未开启备份选项，并且engine支持备份，强制设置备份
         is_backup = (
@@ -418,7 +429,10 @@ class WorkflowContentSerializer(serializers.ModelSerializer):
                     Audit.add(WorkflowDict.workflow_type["sqlreview"], workflow.id)
         except Exception as e:
             logger.error(f"提交工单报错，错误信息：{traceback.format_exc()}")
-            raise serializers.ValidationError({"errors": str(e)})
+            # B2补充: 落库异常同样脱敏回传
+            raise serializers.ValidationError(
+                {"errors": masked_engine_error(e, "workflow create db error")}
+            )
         else:
             # 自动审核通过且开启了Apply阶段通知参数才发送消息通知
             is_notified = (

@@ -467,7 +467,7 @@ class TestWorkflow(APITestCase):
 
     @patch("sql_api.api_workflow.get_engine")
     def test_check_inception_Exception(self, _get_engine):
-        """测试工单检测，inception报错"""
+        """测试工单检测，inception报错——异常出口已脱敏，不回传原始错误"""
         json_data = {
             "full_sql": "use mysql",
             "db_name": "test_db",
@@ -475,8 +475,35 @@ class TestWorkflow(APITestCase):
         }
         _get_engine.side_effect = RuntimeError("RuntimeError")
         r = self.client.post("/api/v1/workflow/sqlcheck/", json_data, format="json")
-        print(json.loads(r.content))
-        self.assertDictEqual(json.loads(r.content), {"errors": "RuntimeError"})
+        errors = json.loads(r.content)["errors"]
+        self.assertIn("ref=", errors)
+        self.assertNotIn("RuntimeError", errors)
+
+    def test_check_dangerous_function_blocked(self):
+        """安全补丁B4：报错回显型函数被拦截"""
+        json_data = {
+            "full_sql": "update account_permission set id=id where "
+            "GTID_SUBSET(concat('A',(select 1)),1)",
+            "db_name": "test_db",
+            "instance_id": self.ins.id,
+        }
+        r = self.client.post("/api/v1/workflow/sqlcheck/", json_data, format="json")
+        self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("不允许的函数", json.loads(r.content)["errors"])
+
+    def test_check_dangerous_ddl_blocked(self):
+        """安全补丁：危险DDL（DROP TABLE/TRUNCATE）被拦截"""
+        for sql in ("drop table account", "truncate table account"):
+            json_data = {
+                "full_sql": sql,
+                "db_name": "test_db",
+                "instance_id": self.ins.id,
+            }
+            r = self.client.post(
+                "/api/v1/workflow/sqlcheck/", json_data, format="json"
+            )
+            self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+            self.assertIn("危险DDL", json.loads(r.content)["errors"])
 
     @patch("sql_api.serializers.get_engine")
     def test_check(self, _get_engine):

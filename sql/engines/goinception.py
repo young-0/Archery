@@ -2,6 +2,7 @@
 import logging
 import re
 import traceback
+import uuid
 import MySQLdb
 import pymysql
 import simplejson as json
@@ -94,6 +95,28 @@ class GoInceptionEngine(EngineBase):
         check_result.checked = True
         check_result.error = inception_result.error
         check_result.warning = inception_result.warning
+        # B2: 报错脱敏——阻断 error-based 注入回显信道（GTID_SUBSET/UPDATEXML 等
+        # 会把子查询结果拼进 MySQL 原生报错）。原文仅留服务端日志，带 ref 供排障。
+        # 系统配置 sql_check_error_mask=false 可关闭（恢复原始报错显示）。
+        if SysConfig().get("sql_check_error_mask", True):
+            for row in check_result.rows:
+                if row.errormessage:
+                    ref = uuid.uuid4().hex[:8]
+                    logger.warning(
+                        f"sqlcheck error masked ref={ref} "
+                        f"instance={getattr(instance, 'id', None)} db={db_name} "
+                        f"raw={row.errormessage}"
+                    )
+                    row.errormessage = (
+                        f"SQL检查报错（详情已脱敏，排查请联系管理员，ref={ref}）"
+                    )
+            if check_result.error:
+                ref = uuid.uuid4().hex[:8]
+                logger.warning(
+                    f"sqlcheck top error masked ref={ref} "
+                    f"instance={getattr(instance, 'id', None)} raw={check_result.error}"
+                )
+                check_result.error = f"SQL检查报错（详情已脱敏，ref={ref}）"
         return check_result
 
     def execute(self, workflow=None):
