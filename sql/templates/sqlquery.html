@@ -903,7 +903,7 @@
                     $("#" + ('masking_time') + n).text(result['mask_time'] + ' sec');
                     //主从延迟赋值，仅在出现延迟时展示，null和0都不展示
                     if (result['seconds_behind_master']) {
-                        $("#seconds_behind_master").text('Seconds_Behind_Master:  ' + result['seconds_behind_master']);
+                        $("#seconds_behind_master").text('Seconds_Behind_Source:  ' + result['seconds_behind_master']);
                     }
                 }
 

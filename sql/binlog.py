@@ -69,7 +69,8 @@ def del_binlog(request):
     if binlog:
         query_engine = get_engine(instance=instance)
         binlog = query_engine.escape_string(binlog)
-        query_result = query_engine.query(sql=rf"purge master logs to '{binlog}';")
+        # MySQL 8.4+ 移除 PURGE MASTER LOGS；PURGE BINARY LOGS 在 5.7/8.0/8.4/MariaDB 均可用
+        query_result = query_engine.query(sql=rf"purge binary logs to '{binlog}';")
         if query_result.error is None:
             result = {"status": 0, "msg": "清理成功", "data": ""}
         else:

@@ -1,7 +1,7 @@
 import MySQLdb
 import json
 from datetime import timedelta, datetime
-from unittest.mock import patch, Mock, ANY
+from unittest.mock import patch, Mock, MagicMock, ANY
 
 import sqlparse
 from django.contrib.auth import get_user_model
@@ -594,11 +594,30 @@ class TestMysql(TestCase):
         _query.assert_called_once_with(sql="kill 100")
 
     @patch.object(MysqlEngine, "query")
-    def test_seconds_behind_master(self, _query):
+    @patch.object(MysqlEngine, "get_connection")
+    def test_seconds_behind_master(self, _get_connection, _query):
         new_engine = MysqlEngine(instance=self.ins1)
+        new_engine.conn = MagicMock()
+        new_engine.conn.get_server_info.return_value = "5.7.40"
         new_engine.seconds_behind_master
         _query.assert_called_once_with(
             sql="show slave status",
+            close_conn=False,
+            cursorclass=MySQLdb.cursors.DictCursor,
+        )
+
+    @patch.object(MysqlEngine, "query")
+    @patch.object(MysqlEngine, "get_connection")
+    def test_seconds_behind_master_mysql84(self, _get_connection, _query):
+        """MySQL 8.4+ 使用 SHOW REPLICA STATUS / Seconds_Behind_Source"""
+        new_engine = MysqlEngine(instance=self.ins1)
+        new_engine.conn = MagicMock()
+        new_engine.conn.get_server_info.return_value = "8.4.8"
+        _query.return_value = ResultSet()
+        _query.return_value.rows = [{"Seconds_Behind_Source": 3}]
+        self.assertEqual(new_engine.seconds_behind_master, 3)
+        _query.assert_called_once_with(
+            sql="show replica status",
             close_conn=False,
             cursorclass=MySQLdb.cursors.DictCursor,
         )

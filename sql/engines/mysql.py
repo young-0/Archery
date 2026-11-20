@@ -106,16 +106,29 @@ class MysqlEngine(EngineBase):
 
     @property
     def seconds_behind_master(self):
+        # MySQL 8.4+ 移除 SHOW SLAVE STATUS，改用 SHOW REPLICA STATUS（MariaDB 仍用 slave）
+        # 8.4 字段为 Seconds_Behind_Source；旧版为 Seconds_Behind_Master
+        self.get_connection()
+        version_str = self.conn.get_server_info()
+        if "MariaDB" in version_str:
+            status_sql = "show slave status"
+        else:
+            sv = self.server_version
+            if sv and sv >= (8, 4):
+                status_sql = "show replica status"
+            else:
+                status_sql = "show slave status"
         slave_status = self.query(
-            sql="show slave status",
+            sql=status_sql,
             close_conn=False,
             cursorclass=MySQLdb.cursors.DictCursor,
         )
-        return (
-            slave_status.rows[0].get("Seconds_Behind_Master")
-            if slave_status.rows
-            else None
-        )
+        if not slave_status.rows:
+            return None
+        row = slave_status.rows[0]
+        if "Seconds_Behind_Source" in row:
+            return row.get("Seconds_Behind_Source")
+        return row.get("Seconds_Behind_Master")
 
     @property
     def server_version(self):
